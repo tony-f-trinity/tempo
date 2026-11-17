@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Entrar · Editor · Tempo Continuum</title>
+  <link rel="icon" href="../logos/logo-escuro.svg">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600&amp;display=swap">
+  <link rel="stylesheet" href="editor.css">
+  <style>
+    .entrar { max-width: 360px; margin: 12vh auto; padding: 24px; display: grid; gap: 12px; }
+    .entrar input { width: 100%; padding: 10px; font: inherit; box-sizing: border-box; }
+    .entrar .erro { color: #b00020; min-height: 1.2em; margin: 0; }
+  </style>
+</head>
+<body>
+  <form class="entrar" id="form" autocomplete="on">
+    <h1>Editor · Tempo Continuum</h1>
+    <label>Usuário <input id="usuario" name="username" autocomplete="username" required autofocus></label>
+    <label>Senha <input id="senha" name="password" type="password" autocomplete="current-password" required></label>
+    <button class="botao principal" type="submit">Entrar</button>
+    <p class="erro" id="erro" role="alert"></p>
+  </form>
+  <script>
+    document.getElementById('form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var erro = document.getElementById('erro');
+      erro.textContent = '';
+      fetch('/api/entrar', {
+        method: 'POST',
+        headers: { 'X-TC-Editor': '1', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usuario: document.getElementById('usuario').value, senha: document.getElementById('senha').value })
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) throw new Error(j.erro || ('erro ' + r.status));
+          location.href = './';
+        });
+      }).catch(function (err) { erro.textContent = err.message; });
+    });
+  </script>
+</body>
+</html>

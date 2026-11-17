@@ -13,3 +13,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Editor online: usuários e senhas (hash), nunca no GitHub
+privado/

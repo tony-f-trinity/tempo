@@ -100,7 +100,10 @@
     return fetch('/api/' + url, { method: corpo !== undefined ? 'POST' : 'GET', headers: cab, body: corpo, cache: 'no-store' })
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) {
+          // editor online: sessão vencida ou sem login, vai para a tela de entrar
+          if (r.status === 401 && j.entrar) { location.href = 'entrar.html'; return new Promise(function () {}); }
           if (!r.ok) throw new Error(j.erro || ('erro ' + r.status));
+          if (corpo !== undefined) setTimeout(atualizarBotao, 500);   // editor online: conta das pendências
           return j;
         });
       }, function () { throw new Error('não consegui falar com o servidor. Ele está rodando (python scripts/servidor.py)?'); });
@@ -1685,4 +1688,118 @@
   Promise.all([carregarLista(), carregarTags()]).then(function () {
     if (hash[1]) abrir(estado.tipo, hash[1]);
   });
+
+  // Editor online: quem está logado, botão Sair e o painel "Publicar" (pendências com revisão).
+  // No computador local, /api/eu não existe e nada disto aparece.
+  function apiOnline(url, corpo) {
+    var op = { headers: { 'X-TC-Editor': '1' }, cache: 'no-store' };
+    if (corpo !== undefined) { op.method = 'POST'; op.headers['Content-Type'] = 'application/json'; op.body = JSON.stringify(corpo); }
+    return fetch('/api/' + url, op).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (r.status === 401 && j.entrar) { location.href = 'entrar.html'; return new Promise(function () {}); }
+        if (!r.ok) throw new Error(j.erro || ('erro ' + r.status));
+        return j;
+      });
+    });
+  }
+
+  function linkDoItem(caminho) {
+    var m = /^site\/conteudo\/([a-z]+)\/([a-z0-9-]+)\.md$/.exec(caminho);
+    if (!m) return null;
+    var pagina = { noticias: 'materia.html?id=', politicos: 'ficha.html?id=', dossies: 'dossie.html?id=',
+                   metadossies: 'dossie.html?meta=', casos: 'caso.html?id=' }[m[1]];
+    return pagina ? '../' + pagina + m[2] : null;
+  }
+
+  function painelPublicar(revisor) {
+    var dlg = document.getElementById('publicar-dlg');
+    if (!dlg) {
+      dlg = document.createElement('dialog');
+      dlg.id = 'publicar-dlg';
+      dlg.className = 'galeria';
+      document.body.appendChild(dlg);
+    }
+    dlg.innerHTML = '<p>Carregando…</p>';
+    if (!dlg.open) dlg.showModal();
+    apiOnline('pendentes').then(function (j) {
+      dlg.innerHTML = '';
+      var topo = document.createElement('header');
+      var titulo = document.createElement('strong');
+      titulo.textContent = j.pendentes.length ? 'Esperando revisão (' + j.pendentes.length + ')' : 'Nada esperando revisão';
+      var fechar = document.createElement('button');
+      fechar.className = 'botao-texto'; fechar.type = 'button'; fechar.textContent = 'Fechar';
+      fechar.onclick = function () { dlg.close(); };
+      topo.appendChild(titulo); topo.appendChild(fechar); dlg.appendChild(topo);
+      var dica = document.createElement('p');
+      dica.className = 'dica';
+      dica.textContent = j.revisor
+        ? 'Abra cada item para conferir. "Descartar" volta o arquivo para o que está no ar. "Publicar tudo" manda as mudanças para o site.'
+        : 'Suas mudanças estão salvas aqui. Um revisor confere e publica.';
+      dlg.appendChild(dica);
+      var lista = document.createElement('ul');
+      j.pendentes.forEach(function (p) {
+        var li = document.createElement('li');
+        var link = linkDoItem(p.caminho);
+        var nome = document.createElement(link && p.status !== 'apagado' ? 'a' : 'span');
+        nome.textContent = p.caminho.replace(/^site\//, '');
+        if (link && p.status !== 'apagado') { nome.href = link; nome.target = '_blank'; nome.rel = 'noopener'; }
+        li.appendChild(nome);
+        li.appendChild(document.createTextNode(' · ' + p.status + (p.usuarios.length ? ' · por ' + p.usuarios.join(', ') : '') + (p.quando ? ' · ' + p.quando : '') + ' '));
+        if (j.revisor) {
+          var desc = document.createElement('button');
+          desc.className = 'botao-texto'; desc.type = 'button'; desc.textContent = 'Descartar';
+          desc.onclick = function () {
+            if (!confirm('Descartar a mudança em ' + p.caminho + '? O arquivo volta a ser o que está no ar.')) return;
+            apiOnline('descartar', { caminho: p.caminho }).then(function () { painelPublicar(revisor); atualizarBotao(); })
+              .catch(function (e) { alert(e.message); });
+          };
+          li.appendChild(desc);
+        }
+        lista.appendChild(li);
+      });
+      dlg.appendChild(lista);
+      if (j.revisor && j.pendentes.length) {
+        var pub = document.createElement('button');
+        pub.className = 'botao principal'; pub.type = 'button'; pub.textContent = 'Publicar tudo';
+        pub.onclick = function () {
+          pub.disabled = true; pub.textContent = 'Publicando…';
+          apiOnline('publicar', {}).then(function (r) {
+            alert(r.publicados + ' arquivo(s) publicados. O site atualiza em 1 ou 2 minutos.');
+            painelPublicar(revisor); atualizarBotao();
+          }).catch(function (e) { alert(e.message); pub.disabled = false; pub.textContent = 'Publicar tudo'; });
+        };
+        dlg.appendChild(pub);
+      }
+    }).catch(function (e) { dlg.innerHTML = ''; var p = document.createElement('p'); p.textContent = e.message; dlg.appendChild(p); });
+  }
+
+  var botaoPublicar = null;
+  function atualizarBotao() {
+    if (!botaoPublicar) return;
+    apiOnline('pendentes').then(function (j) {
+      botaoPublicar.textContent = 'Publicar' + (j.pendentes.length ? ' (' + j.pendentes.length + ')' : '');
+    }).catch(function () {});
+  }
+
+  fetch('/api/eu', { headers: { 'X-TC-Editor': '1' }, cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+    if (!j || !j.online) return;
+    var acoes = document.querySelector('.topo-acoes');
+    if (!acoes) return;
+    botaoPublicar = document.createElement('button');
+    botaoPublicar.type = 'button';
+    botaoPublicar.className = 'botao-texto';
+    botaoPublicar.textContent = 'Publicar';
+    botaoPublicar.onclick = function () { painelPublicar(j.revisor); };
+    acoes.appendChild(botaoPublicar);
+    var sair = document.createElement('button');
+    sair.type = 'button';
+    sair.className = 'botao-texto';
+    sair.textContent = 'Sair (' + j.usuario + ')';
+    sair.onclick = function () {
+      fetch('/api/sair', { method: 'POST', headers: { 'X-TC-Editor': '1' } }).then(function () { location.href = 'entrar.html'; });
+    };
+    acoes.appendChild(sair);
+    atualizarBotao();
+    setInterval(atualizarBotao, 20000);
+  }).catch(function () {});
 })();

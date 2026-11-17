@@ -8,9 +8,14 @@
   fichas, votações, vídeos, vídeos curtos, publicações, dossiês, meta-dossiês e casos (arquivos .md), enviar imagens, importar consultas do
   e-Cidadania e gerar o PDF de um dossiê ou meta-dossiê (com o Edge ou o Chrome, sem abrir janela). Por segurança, só aceita pedidos do próprio computador.
 
+Modo online (--online, ver scripts/online.py): o editor aceita pedidos de fora, mas só de quem entrou com usuário e
+senha. As mudanças ficam pendentes no servidor até um revisor publicar (um commit com push para o GitHub). Para rodar
+atrás de um proxy com HTTPS (Caddy, nginx).
+
 Uso:  python scripts/servidor.py            (só neste computador)
       python scripts/servidor.py --rede     (outros aparelhos da mesma rede Wi-Fi também acessam)
       python scripts/servidor.py --porta 8080
+      python scripts/servidor.py --online --ramo main   (servidor na internet, atrás de HTTPS)
 """
 import argparse
 import contextlib
@@ -63,6 +68,7 @@ _spec = importlib.util.spec_from_file_location("gerar_indice", RAIZ / "scripts" 
 gerar_indice = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gerar_indice)
 import ecidadania  # noqa: E402  (scripts/ já está no caminho, pelo gerar-indice)
+import online  # noqa: E402
 
 _trava = threading.Lock()
 _assinatura = None
@@ -421,10 +427,18 @@ class Manipulador(SimpleHTTPRequestHandler):
         ".webp": "image/webp",
     }
 
+    # Modo online (main() preenche): sessões de login e o publicador do git
+    ONLINE = False
+    sessoes = None
+    publicador = None
+
     def do_GET(self):
         url = urlparse(self.path)
         if url.path.startswith("/api/"):
             return self._api("GET", url)
+        # No modo online, a pasta local/ (arquivos só do computador) e os scripts não saem pela internet
+        if self.ONLINE and (url.path.startswith("/local/") or url.path.startswith("/scripts/")):
+            return self.send_error(404)
         # Antes de entregar a lista de matérias ou de fichas, confere se o conteúdo mudou
         if url.path in INDICES:
             atualizar_indices()
@@ -437,8 +451,82 @@ class Manipulador(SimpleHTTPRequestHandler):
         self.send_error(405)
 
     # ---- API do editor
+    def _usuario(self):
+        return self.sessoes.usuario(online.token_do_cookie(self.headers.get("Cookie"))) if self.ONLINE else None
+
+    def _mesma_origem(self):
+        if self.headers.get("X-TC-Editor") != "1":
+            return False
+        origem = self.headers.get("Origin")
+        return not origem or urlparse(origem).netloc == self.headers.get("Host")
+
+    def _endereco(self):
+        # atrás do proxy, o endereço de verdade vem no X-Forwarded-For (o Caddy põe)
+        return (self.headers.get("X-Forwarded-For") or self.client_address[0]).split(",")[0].strip()
+
+    def _api_login(self, rota):
+        """Entrar, sair e "quem sou eu" do modo online. Devolve True se atendeu a rota."""
+        if rota == ("POST", "/api/entrar"):
+            if not self._mesma_origem():
+                self._responder(403, {"erro": "pedido recusado"})
+                return True
+            endereco = self._endereco()
+            if self.sessoes.travado(endereco):
+                self._responder(429, {"erro": "muitas tentativas; espere 10 minutos"})
+                return True
+            try:
+                pedido = json.loads(self._corpo(4096) or b"{}")
+            except (ValueError, ErroApi):
+                pedido = {}
+            usuario, senha = str(pedido.get("usuario") or "").strip().lower(), str(pedido.get("senha") or "")
+            if not usuario or not online.conferir_senha(usuario, senha):
+                self.sessoes.errou(endereco)
+                self._responder(401, {"erro": "usuário ou senha errados"})
+                return True
+            token = self.sessoes.criar(usuario, endereco)
+            self._responder(200, {"usuario": usuario}, cookie=online.cookie_sessao(token))
+            return True
+        if rota == ("POST", "/api/sair"):
+            self.sessoes.encerrar(online.token_do_cookie(self.headers.get("Cookie")))
+            self._responder(200, {"ok": True}, cookie=online.cookie_sessao("", apagar=True))
+            return True
+        if rota == ("GET", "/api/eu"):
+            u = self._usuario()
+            self._responder(200 if u else 401, {"usuario": u, "online": True, "revisor": online.e_revisor(u)} if u
+                            else {"erro": "entre de novo"})
+            return True
+        if rota[1] in ("/api/pendentes", "/api/publicar", "/api/descartar"):
+            u = self._usuario()
+            if not u or not self._mesma_origem():
+                self._responder(401, {"erro": "entre com seu usuário e senha", "entrar": True})
+                return True
+            try:
+                if rota == ("GET", "/api/pendentes"):
+                    self._responder(200, {"pendentes": self.publicador.listar(), "revisor": online.e_revisor(u)})
+                    return True
+                if not online.e_revisor(u):
+                    self._responder(403, {"erro": "só quem revisa pode publicar ou descartar"})
+                    return True
+                if rota == ("POST", "/api/publicar"):
+                    n = self.publicador.publicar(u)
+                    self._responder(200, {"publicados": n})
+                elif rota == ("POST", "/api/descartar"):
+                    pedido = json.loads(self._corpo(4096) or b"{}")
+                    self.publicador.descartar(str(pedido.get("caminho") or ""))
+                    atualizar_indices(forcar=True)
+                    self._responder(200, {"ok": True})
+                else:
+                    self._responder(404, {"erro": "rota desconhecida"})
+            except (RuntimeError, ValueError, OSError) as e:
+                self._responder(400, {"erro": f"não consegui ({e})"})
+            return True
+        return False
+
     def _permitido(self):
-        """Só o próprio computador, só a página do editor (cabeçalho próprio) e só da mesma origem."""
+        """Só o próprio computador, só a página do editor (cabeçalho próprio) e só da mesma origem.
+        No modo online: de qualquer lugar, mas só com sessão de login válida."""
+        if self.ONLINE:
+            return bool(self._usuario()) and self._mesma_origem()
         try:
             if not ipaddress.ip_address(self.client_address[0].split("%")[0]).is_loopback:
                 return False
@@ -449,9 +537,11 @@ class Manipulador(SimpleHTTPRequestHandler):
         origem = self.headers.get("Origin")
         return not origem or urlparse(origem).netloc == self.headers.get("Host")
 
-    def _responder(self, codigo, dados):
+    def _responder(self, codigo, dados, cookie=None):
         corpo = json.dumps(dados, ensure_ascii=False).encode("utf-8")
         self.send_response(codigo)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(corpo)))
         self.end_headers()
@@ -464,10 +554,16 @@ class Manipulador(SimpleHTTPRequestHandler):
         return self.rfile.read(n)
 
     def _api(self, metodo, url):
+        rota = (metodo, url.path)
+        if self.ONLINE and self._api_login(rota):
+            return
         if not self._permitido():
+            if self.ONLINE:
+                return self._responder(401, {"erro": "entre com seu usuário e senha", "entrar": True})
             return self._responder(403, {"erro": "o editor só funciona neste computador"})
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
-        rota = (metodo, url.path)
+        if self.ONLINE and rota == ("POST", "/api/local"):
+            return self._responder(403, {"erro": "no editor online não se grava arquivo local"})
         try:
             if rota == ("GET", "/api/itens"):
                 r = api_itens(q.get("tipo"))
@@ -486,13 +582,15 @@ class Manipulador(SimpleHTTPRequestHandler):
             elif rota == ("GET", "/api/imagens"):
                 r = api_imagens(q.get("pasta"))
             elif rota == ("POST", "/api/salvar"):
-                r = api_salvar(json.loads(self._corpo(MAX_TEXTO) or b"{}"))
+                pedido = json.loads(self._corpo(MAX_TEXTO) or b"{}")
+                r = api_salvar(pedido)
             elif rota == ("POST", "/api/local"):
                 r = api_local(json.loads(self._corpo(MAX_TEXTO) or b"{}"))
             elif rota == ("POST", "/api/apagar"):
-                r = api_apagar(json.loads(self._corpo(MAX_TEXTO) or b"{}"))
-            elif rota == ("POST", "/api/pdf"):
                 pedido = json.loads(self._corpo(MAX_TEXTO) or b"{}")
+                r = api_apagar(pedido)
+            elif rota == ("POST", "/api/pdf"):
+                pedido = json.loads(self._corpo(MAX_TEXTO) or b"{}")  # (PDF sai junto na próxima publicação)
                 r = api_pdf(pedido.get("tipo"), pedido.get("id"), self.server.server_address[1])
             elif rota == ("POST", "/api/imagem"):
                 tipo = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -503,7 +601,25 @@ class Manipulador(SimpleHTTPRequestHandler):
             return self._responder(e.codigo, {"erro": str(e)})
         except (ValueError, OSError) as e:
             return self._responder(400, {"erro": f"não consegui concluir ({e})"})
+        if self.ONLINE and metodo == "POST" and rota[1] in ("/api/salvar", "/api/apagar", "/api/imagem", "/api/pdf"):
+            caminhos = self._caminhos_mudados(rota[1], locals().get("pedido") or {}, r)
+            if caminhos:
+                self.publicador.registrar(caminhos, self._usuario(), rota[1].rsplit("/", 1)[1])
         self._responder(200, r)
+
+    @staticmethod
+    def _caminhos_mudados(rota, pedido, r):
+        """Arquivos (relativos à raiz do repositório) que a ação mudou, para anotar quem editou."""
+        def rel(c):
+            return Path(c).resolve().relative_to(RAIZ.parent).as_posix()
+        with contextlib.suppress(ErroApi, ValueError, KeyError, TypeError):
+            if rota == "/api/salvar":
+                return [rel(caminho_item(pedido["tipo"], r["id"]))]
+            if rota == "/api/apagar":
+                return [rel(caminho_item(pedido["tipo"], pedido["id"]))]
+            if rota == "/api/imagem":
+                return [rel(RAIZ / r["caminho"])]
+        return []
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
@@ -529,9 +645,20 @@ def main():
     ap = argparse.ArgumentParser(description="Servidor local do site Tempo Continuum")
     ap.add_argument("--porta", type=int, default=8000)
     ap.add_argument("--rede", action="store_true", help="aceitar acessos de outros aparelhos da rede local")
+    ap.add_argument("--online", action="store_true",
+                    help="editor na internet, com login e commit+push a cada mudança (rodar atrás de HTTPS)")
+    ap.add_argument("--ramo", help="ramo do git para onde o modo online manda as mudanças (padrão: o atual)")
     args = ap.parse_args()
 
-    endereco = "0.0.0.0" if args.rede else "127.0.0.1"
+    if args.online:
+        if not online.ler_usuarios():
+            print("Modo online sem nenhum usuário. Crie um com: python scripts/usuarios.py adicionar <usuario>",
+                  file=sys.stderr)
+            sys.exit(1)
+        Manipulador.ONLINE = True
+        Manipulador.sessoes = online.Sessoes()
+        Manipulador.publicador = online.Publicador(RAIZ.parent, args.ramo)
+    endereco = "0.0.0.0" if (args.rede or args.online) else "127.0.0.1"
     try:
         servidor = ThreadingHTTPServer((endereco, args.porta), partial(Manipulador, directory=str(RAIZ)))
     except OSError:
