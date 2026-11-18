@@ -52,6 +52,9 @@ O mesmo editor, num servidor na internet, para os voluntários escreverem de cas
   de quem editou). No editor, o botão **Publicar** lista as pendências; quem é revisor
   (`python3 site/scripts/usuarios.py revisor <usuario> sim`) pode descartar cada uma ou publicar tudo, num commit só
   com o nome do revisor e de quem editou cada item, e push para o ramo configurado.
-- Segurança: no modo online, `site/local/`, `site/scripts/` e a rota `/api/local` ficam fechadas para a internet.
+- Segurança: no modo online, `site/scripts/` fica fechada para a internet; `site/local/` só abre para quem entrou, e
+  `/api/local` só grava o texto dos Mapas do Movimento (`plano-tc.md` e `plano.md`).
+- Mapas do Movimento: ficam fora do git (o repositório é público). Para aparecerem no editor online, copie
+  `site/local/planos/` para a mesma pasta no servidor. O que se edita lá fica no servidor, sem voltar para cá.
 - Código: `site/scripts/online.py` (login, sessões, git), `site/scripts/usuarios.py`, `site/admin/entrar.html` e
   poucas linhas em `servidor.py` e `admin/editor.js`.

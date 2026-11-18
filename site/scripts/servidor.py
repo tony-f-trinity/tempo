@@ -271,6 +271,7 @@ def api_salvar(pedido):
 
 # Arquivos só deste computador (site/local/ fica fora do git e da publicação), como o texto do Plano do Movimento
 PASTA_LOCAL = RAIZ / "local"
+LOCAL_ONLINE = {"plano-tc.md", "plano.md"}   # o que o editor online pode gravar em local/ (Mapas do Movimento)
 
 
 def api_local(pedido):
@@ -436,8 +437,9 @@ class Manipulador(SimpleHTTPRequestHandler):
         url = urlparse(self.path)
         if url.path.startswith("/api/"):
             return self._api("GET", url)
-        # No modo online, a pasta local/ (arquivos só do computador) e os scripts não saem pela internet
-        if self.ONLINE and (url.path.startswith("/local/") or url.path.startswith("/scripts/")):
+        # No modo online, os scripts não saem pela internet, e a pasta local/ (fora do git: os Mapas do Movimento)
+        # só sai para quem entrou com usuário e senha
+        if self.ONLINE and (url.path.startswith("/scripts/") or (url.path.startswith("/local/") and not self._usuario())):
             return self.send_error(404)
         # Antes de entregar a lista de matérias ou de fichas, confere se o conteúdo mudou
         if url.path in INDICES:
@@ -562,8 +564,6 @@ class Manipulador(SimpleHTTPRequestHandler):
                 return self._responder(401, {"erro": "entre com seu usuário e senha", "entrar": True})
             return self._responder(403, {"erro": "o editor só funciona neste computador"})
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
-        if self.ONLINE and rota == ("POST", "/api/local"):
-            return self._responder(403, {"erro": "no editor online não se grava arquivo local"})
         try:
             if rota == ("GET", "/api/itens"):
                 r = api_itens(q.get("tipo"))
@@ -585,7 +585,11 @@ class Manipulador(SimpleHTTPRequestHandler):
                 pedido = json.loads(self._corpo(MAX_TEXTO) or b"{}")
                 r = api_salvar(pedido)
             elif rota == ("POST", "/api/local"):
-                r = api_local(json.loads(self._corpo(MAX_TEXTO) or b"{}"))
+                pedido = json.loads(self._corpo(MAX_TEXTO) or b"{}")
+                # online, a pasta local/ só recebe o texto dos Mapas do Movimento (fica no servidor, fora do git)
+                if self.ONLINE and pedido.get("nome") not in LOCAL_ONLINE:
+                    raise ErroApi("no editor online só se gravam os Mapas do Movimento", 403)
+                r = api_local(pedido)
             elif rota == ("POST", "/api/apagar"):
                 pedido = json.loads(self._corpo(MAX_TEXTO) or b"{}")
                 r = api_apagar(pedido)

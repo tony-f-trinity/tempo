@@ -208,13 +208,13 @@
     })));
   }
 
-  // Ferramentas da lateral. Os Mapas do Movimento só aparecem se site/local/planos/ existir neste computador.
+  // Ferramentas da lateral. Os Mapas do Movimento só aparecem se site/local/planos/ existir (no computador ou no servidor online).
   var FERRAMENTAS = [
     { chave: 'gerador', nome: 'Gerador de imagens', resumo: 'posts e prévias de link',
       dica: 'Monte imagens para redes sociais e prévias de link, com título que se ajusta sozinho, foto de fundo, logos, camadas e QR code. Para a imagem de uma matéria, abra a matéria: lá o gerador já vem preenchido.',
       montar: function (lugar) { TCGerador.montar(lugar, { chave: 'tc-gerador-imagens' }); } },
-    { chave: 'mapas', nome: 'Mapas do Movimento', resumo: 'só neste computador', existe: function () { return !!window.TCPlanos; },
-      dica: 'Os dois planos lado a lado: o do Tempo Continuum como coletivo e a proposta de movimento político. Clique em qualquer ponto do mapa para ver o que ele recebe e entrega; no fim de cada aba, o plano inteiro pode ser editado em Markdown. "Baixar texto (.docx)" gera o plano da aba aberta em texto corrido, para ler ou revisar no Word ou no Google Docs. Fica só neste computador (site/local/), fora do git.',
+    { chave: 'mapas', nome: 'Mapas do Movimento', resumo: 'fora do git', existe: function () { return !!window.TCPlanos; },
+      dica: 'Os dois planos lado a lado: o do Tempo Continuum como coletivo e a proposta de movimento político. Clique em qualquer ponto do mapa para ver o que ele recebe e entrega; no fim de cada aba, o plano inteiro pode ser editado em Markdown. "Baixar texto (.docx)" gera o plano da aba aberta em texto corrido, para ler ou revisar no Word ou no Google Docs. Fica em site/local/, fora do git: no computador e, no editor online, só no servidor e só para quem entrou.',
       montar: function (lugar, sub) { lugar.classList.add('pl-lugar'); TCPlanos.montar(lugar, sub); } }
   ];
   function abrirFerramenta(chave, sub) {
