@@ -269,9 +269,23 @@ def api_salvar(pedido):
     return {"id": id_}
 
 
-# Arquivos só deste computador (site/local/ fica fora do git e da publicação), como o texto do Plano do Movimento
+# Arquivos só deste computador (site/local/ fica fora do git e da publicação)
 PASTA_LOCAL = RAIZ / "local"
-LOCAL_ONLINE = {"plano-tc.md", "plano.md"}   # o que o editor online pode gravar em local/ (Mapas do Movimento)
+
+# Texto dos Mapas do Movimento (admin/mapas/, no git; fora do site publicado, como todo o admin/)
+PASTA_MAPAS = RAIZ / "admin" / "mapas"
+ARQUIVOS_MAPAS = {"plano-tc.md", "plano.md"}
+
+
+def api_mapa(pedido):
+    nome, texto = pedido.get("nome"), pedido.get("texto")
+    if nome not in ARQUIVOS_MAPAS or not isinstance(texto, str):
+        raise ErroApi("pedido inválido")
+    destino = PASTA_MAPAS / nome
+    temp = destino.with_name(nome + ".tmp")
+    temp.write_text(texto.replace("\r\n", "\n"), encoding="utf-8", newline="\n")
+    temp.replace(destino)
+    return {"nome": nome}
 
 
 def api_local(pedido):
@@ -437,9 +451,8 @@ class Manipulador(SimpleHTTPRequestHandler):
         url = urlparse(self.path)
         if url.path.startswith("/api/"):
             return self._api("GET", url)
-        # No modo online, os scripts não saem pela internet, e a pasta local/ (fora do git: os Mapas do Movimento)
-        # só sai para quem entrou com usuário e senha
-        if self.ONLINE and (url.path.startswith("/scripts/") or (url.path.startswith("/local/") and not self._usuario())):
+        # No modo online, a pasta local/ (arquivos só do computador) e os scripts não saem pela internet
+        if self.ONLINE and (url.path.startswith("/local/") or url.path.startswith("/scripts/")):
             return self.send_error(404)
         # Antes de entregar a lista de matérias ou de fichas, confere se o conteúdo mudou
         if url.path in INDICES:
@@ -585,11 +598,12 @@ class Manipulador(SimpleHTTPRequestHandler):
                 pedido = json.loads(self._corpo(MAX_TEXTO) or b"{}")
                 r = api_salvar(pedido)
             elif rota == ("POST", "/api/local"):
+                if self.ONLINE:
+                    raise ErroApi("no editor online não se grava arquivo local", 403)
+                r = api_local(json.loads(self._corpo(MAX_TEXTO) or b"{}"))
+            elif rota == ("POST", "/api/mapa"):
                 pedido = json.loads(self._corpo(MAX_TEXTO) or b"{}")
-                # online, a pasta local/ só recebe o texto dos Mapas do Movimento (fica no servidor, fora do git)
-                if self.ONLINE and pedido.get("nome") not in LOCAL_ONLINE:
-                    raise ErroApi("no editor online só se gravam os Mapas do Movimento", 403)
-                r = api_local(pedido)
+                r = api_mapa(pedido)
             elif rota == ("POST", "/api/apagar"):
                 pedido = json.loads(self._corpo(MAX_TEXTO) or b"{}")
                 r = api_apagar(pedido)
@@ -605,7 +619,7 @@ class Manipulador(SimpleHTTPRequestHandler):
             return self._responder(e.codigo, {"erro": str(e)})
         except (ValueError, OSError) as e:
             return self._responder(400, {"erro": f"não consegui concluir ({e})"})
-        if self.ONLINE and metodo == "POST" and rota[1] in ("/api/salvar", "/api/apagar", "/api/imagem", "/api/pdf"):
+        if self.ONLINE and metodo == "POST" and rota[1] in ("/api/salvar", "/api/apagar", "/api/imagem", "/api/pdf", "/api/mapa"):
             caminhos = self._caminhos_mudados(rota[1], locals().get("pedido") or {}, r)
             if caminhos:
                 self.publicador.registrar(caminhos, self._usuario(), rota[1].rsplit("/", 1)[1])
@@ -623,6 +637,8 @@ class Manipulador(SimpleHTTPRequestHandler):
                 return [rel(caminho_item(pedido["tipo"], pedido["id"]))]
             if rota == "/api/imagem":
                 return [rel(RAIZ / r["caminho"])]
+            if rota == "/api/mapa":
+                return [rel(PASTA_MAPAS / r["nome"])]
         return []
 
     def end_headers(self):

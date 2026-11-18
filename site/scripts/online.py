@@ -153,7 +153,7 @@ def cookie_sessao(token, apagar=False):
 
 # ---------------- git: pendências e publicação ----------------
 
-PASTAS_PUBLICADAS = ("site/conteudo", "site/imagens", "site/arquivos")
+PASTAS_PUBLICADAS = ("site/conteudo", "site/imagens", "site/arquivos", "site/admin/mapas")   # mapas: texto dos Mapas do Movimento
 ARQ_PENDENTES = RAIZ.parent / "privado" / "pendentes.json"
 
 
